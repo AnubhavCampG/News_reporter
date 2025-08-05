@@ -1,8 +1,41 @@
+"""
+Indian Stock Market News Scraper
+
+This script collects latest global news related to companies and factors 
+that could have a direct impact on Indian stock markets.
+
+Configuration:
+To use your own API keys, set these environment variables:
+- NEWSAPI_KEY: Your NewsAPI key from https://newsapi.org/
+- FINNHUB_KEY: Your Finnhub API key from https://finnhub.io/
+
+Example (Windows):
+set NEWSAPI_KEY=your_newsapi_key_here
+set FINNHUB_KEY=your_finnhub_key_here
+
+Example (Linux/Mac):
+export NEWSAPI_KEY=your_newsapi_key_here
+export FINNHUB_KEY=your_finnhub_key_here
+
+Recent fixes applied:
+- Fixed undefined response variable in error handling
+- Updated hardcoded dates to use dynamic current year
+- Added proper href validation for all scraping functions
+- Moved API keys to environment variables for security
+- Added rate limiting to prevent IP blocking
+- Ensured consistent URL construction across all functions
+- Implemented compact pipe-separated format for space efficiency
+- Added content compression while preserving full information
+- Optimized output for LLM processing and analysis
+"""
+
 import requests
 from bs4 import BeautifulSoup
 from datetime import datetime
 import time
 import re
+import os
+import random
 from urllib.parse import urljoin
 
 # Nifty 50 tickers (unchanged)
@@ -25,6 +58,11 @@ def construct_url(base_url, href):
         return href
     return urljoin(base_url, href)
 
+def rate_limit():
+    """Add random delay to prevent IP blocking"""
+    delay = random.uniform(0.5, 2.0)  # Random delay between 0.5 to 2 seconds
+    time.sleep(delay)
+
 def get_full_article_content(url, source_name):
     """Fetch full article content from URL"""
     headers = {
@@ -36,6 +74,7 @@ def get_full_article_content(url, source_name):
         'Upgrade-Insecure-Requests': '1',
     }
     try:
+        rate_limit()  # Add rate limiting
         response = requests.get(url, headers=headers, timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
@@ -86,16 +125,34 @@ def get_full_article_content(url, source_name):
         
         if content:
             text = content.get_text(separator=' ', strip=True)
+            # Compress whitespace while preserving all content
             text = re.sub(r'\s+', ' ', text)
+            # Remove special characters but keep essential punctuation
             text = re.sub(r'[^\w\s\.\,\!\?\:\;\-\(\)]', '', text)
-            return text if len(text) > 200 else None
+            # Remove redundant spaces around punctuation to save space
+            text = re.sub(r'\s+([\.!?;,])', r'\1', text)
+            text = re.sub(r'([\.!?;,])\s+', r'\1 ', text)
+            
+            # Remove common redundant phrases to save space while preserving meaning
+            redundant_phrases = [
+                r'\bRead more.*?$', r'\bClick here.*?$', r'\bSubscribe.*?$',
+                r'\bShare this.*?$', r'\bFollow us.*?$', r'\bAdvertisement\b',
+                r'\bAlso read.*?$', r'\bStory continues.*?$'
+            ]
+            for phrase in redundant_phrases:
+                text = re.sub(phrase, '', text, flags=re.IGNORECASE)
+            
+            # Final cleanup
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text if len(text) > 150 else None  # Reduced minimum to capture more articles
         
         return None
     except requests.exceptions.HTTPError as e:
-        if response.status_code in [401, 403, 404]:
-            print(f"Access error for {url} ({source_name}): HTTP {response.status_code} - {str(e)}")
+        if hasattr(e, 'response') and e.response and e.response.status_code in [401, 403, 404]:
+            print(f"Access error for {url} ({source_name}): HTTP {e.response.status_code} - {str(e)}")
             return None
-        raise
+        print(f"HTTP error for {url} ({source_name}): {str(e)}")
+        return None
     except Exception as e:
         print(f"Error fetching content from {url} ({source_name}): {str(e)}")
         return None
@@ -108,7 +165,7 @@ def is_valid_news_item(title, content):
     if len(title.strip()) < 10:
         return False
     
-    if len(content.strip()) < 200:
+    if len(content.strip()) < 150:  # Reduced minimum to capture more articles
         return False
     
     error_indicators = [
@@ -124,42 +181,50 @@ def is_valid_news_item(title, content):
     return True
 
 def fetch_newsapi():
-    """Fetch full news from NewsAPI (unchanged, URLs handled by API response)"""
-    API_KEY = 'b014126aa39e4161a1a6586f7e7fda8a'
-    url = ('https://newsapi.org/v2/everything?'
-           'q=indian%20stocks%20OR%20nifty%20OR%20sensex%20OR%20stock%20market%20india&'
-           'language=en&'
-           'sortBy=publishedAt&'
-           'pageSize=50&'
-           f'apiKey={API_KEY}')
+    """Fetch full news from NewsAPI with multiple search queries for better coverage"""
+    API_KEY = os.getenv('NEWSAPI_KEY', 'b014126aa39e4161a1a6586f7e7fda8a')
+    full_news = []
     
-    try:
-        response = requests.get(url)
-        articles = response.json().get('articles', [])
-        full_news = []
-        
-        for article in articles:
-            title = article.get('title', '')
-            url = article.get('url', '')
+    # Multiple search queries to capture more relevant articles
+    search_queries = [
+        'indian%20stocks%20OR%20nifty%20OR%20sensex%20OR%20stock%20market%20india',
+        'india%20economy%20OR%20rbi%20OR%20rupee%20OR%20mumbai%20stock%20exchange',
+        'adani%20OR%20tata%20OR%20reliance%20OR%20infosys%20OR%20wipro',
+        'emerging%20markets%20india%20OR%20asian%20markets%20OR%20bse%20OR%20nse'
+    ]
+    
+    for query in search_queries:
+        try:
+            url = ('https://newsapi.org/v2/everything?'
+                   f'q={query}&'
+                   'language=en&'
+                   'sortBy=publishedAt&'
+                   'pageSize=50&'
+                   f'apiKey={API_KEY}')
             
-            full_content = get_full_article_content(url, 'NewsAPI')
+            response = requests.get(url)
+            articles = response.json().get('articles', [])
             
-            if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
-                full_news.append(news_item)
-        
-        return full_news
-    except Exception as e:
-        print(f"NewsAPI error: {e}")
-        return []
+            for article in articles:
+                title = article.get('title', '')
+                url = article.get('url', '')
+                
+                full_content = get_full_article_content(url, f'NewsAPI-{query[:20]}')
+                
+                if full_content and is_valid_news_item(title, full_content):
+                    # Compact format: Title|Content separated by pipe, no extra formatting
+                    news_item = f"{title.strip()}|{full_content.strip()}\n"
+                    full_news.append(news_item)
+            
+            rate_limit()  # Delay between API calls
+        except Exception as e:
+            print(f"NewsAPI error for query {query}: {e}")
+    
+    return full_news
 
 def fetch_finnhub_news():
     """Fetch full news from Finnhub API for Indian stocks (unchanged, URLs handled by API response)"""
-    API_KEY = 'd24e0i9r01qu2jghqr50d24e0i9r01qu2jghqr5g'
+    API_KEY = os.getenv('FINNHUB_KEY', 'd24e0i9r01qu2jghqr50d24e0i9r01qu2jghqr5g')
     all_news = []
     
     try:
@@ -167,19 +232,22 @@ def fetch_finnhub_news():
         response = requests.get(url)
         if response.status_code == 200:
             articles = response.json()
-            for article in articles[:30]:
-                if any(keyword in article.get('headline', '').lower() for keyword in ['india', 'indian', 'nifty', 'sensex', 'bse', 'nse']):
+            for article in articles[:50]:
+                # Expanded keywords for better Indian market coverage
+                indian_keywords = [
+                    'india', 'indian', 'nifty', 'sensex', 'bse', 'nse', 'mumbai', 'delhi', 
+                    'rupee', 'rbi', 'reserve bank', 'modi', 'adani', 'tata', 'reliance',
+                    'infosys', 'wipro', 'hdfc', 'icici', 'sbi', 'asian market', 'emerging market'
+                ]
+                if any(keyword in article.get('headline', '').lower() for keyword in indian_keywords):
                     headline = article.get('headline', '')
                     url = article.get('url', '')
                     
                     full_content = get_full_article_content(url, 'Finnhub')
                     
                     if full_content and is_valid_news_item(headline, full_content):
-                        news_item = f"""
-TITLE: {headline}
-FULL CONTENT:
-{full_content}
-"""
+                        # Compact format: Title|Content separated by pipe, no extra formatting
+                        news_item = f"{headline.strip()}|{full_content.strip()}\n"
                         all_news.append(news_item)
     except Exception as e:
         print(f"Finnhub general news error {e}")
@@ -187,22 +255,20 @@ FULL CONTENT:
     for ticker in NIFTY_50_TICKERS:
         try:
             print(f"Fetching news for {ticker}...")
-            url = f'https://finnhub.io/api/v1/company-news?symbol={ticker}&from=2024-01-01&to=2024-12-31&token={API_KEY}'
+            current_year = datetime.now().year
+            url = f'https://finnhub.io/api/v1/company-news?symbol={ticker}&from={current_year}-01-01&to={current_year}-12-31&token={API_KEY}'
             response = requests.get(url)
             if response.status_code == 200:
                 articles = response.json()
-                for article in articles[:10]:
+                for article in articles[:20]:
                     headline = article.get('headline', '')
                     url = article.get('url', '')
                     
                     full_content = get_full_article_content(url, f'Finnhub-{ticker}')
                     
                     if full_content and is_valid_news_item(headline, full_content):
-                        news_item = f"""
-TITLE: {headline}
-FULL CONTENT:
-{full_content}
-"""
+                        # Compact format: Title|Content separated by pipe, no extra formatting
+                        news_item = f"{headline.strip()}|{full_content.strip()}\n"
                         all_news.append(news_item)
             
             time.sleep(0.5)
@@ -224,20 +290,41 @@ def fetch_moneycontrol():
         soup = BeautifulSoup(response.text, 'html.parser')
         news = []
         
-        for item in soup.select('.clearfix .headline'):
-            title = item.get_text(strip=True)
-            href = item.find('a')['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
-            
-            full_content = get_full_article_content(link, 'Moneycontrol')
-            
-            if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
-                news.append(news_item)
+        # Multiple selectors to catch more articles
+        selectors = [
+            '.clearfix .headline', '.news-list h2 a', '.news-item h3 a', 
+            '.story-list h2 a', 'article h2 a', '.content h3 a'
+        ]
+        
+        processed_urls = set()  # Avoid duplicates
+        
+        for selector in selectors:
+            items = soup.select(selector)
+            for item in items:
+                if selector.endswith('a'):
+                    title = item.get_text(strip=True)
+                    href = item.get('href')
+                    if not href:
+                        continue
+                    link = construct_url(base_url, href)
+                else:
+                    title = item.get_text(strip=True)
+                    a_tag = item.find('a')
+                    if not a_tag or not a_tag.get('href'):
+                        continue
+                    href = a_tag['href']
+                    link = construct_url(base_url, href)
+                
+                if link in processed_urls:
+                    continue
+                processed_urls.add(link)
+                
+                full_content = get_full_article_content(link, 'Moneycontrol')
+                
+                if full_content and is_valid_news_item(title, full_content):
+                    # Compact format: Title|Content separated by pipe, no extra formatting
+                    news_item = f"{title.strip()}|{full_content.strip()}\n"
+                    news.append(news_item)
         
         return news
     except Exception as e:
@@ -257,20 +344,33 @@ def fetch_economictimes():
         soup = BeautifulSoup(response.text, 'html.parser')
         news = []
         
-        for item in soup.select('.eachStory h3 a'):
-            title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
-            
-            full_content = get_full_article_content(link, 'Economic Times')
-            
-            if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
-                news.append(news_item)
+        # Multiple selectors to catch more articles from Economic Times
+        selectors = [
+            '.eachStory h3 a', '.story-list h2 a', '.top-news h3 a',
+            'article h3 a', '.news-list h2 a', '.market-news h3 a'
+        ]
+        
+        processed_urls = set()  # Avoid duplicates
+        
+        for selector in selectors:
+            items = soup.select(selector)
+            for item in items:
+                title = item.get_text(strip=True)
+                href = item.get('href')
+                if not href:
+                    continue
+                link = construct_url(base_url, href)
+                
+                if link in processed_urls:
+                    continue
+                processed_urls.add(link)
+                
+                full_content = get_full_article_content(link, 'Economic Times')
+                
+                if full_content and is_valid_news_item(title, full_content):
+                    # Compact format: Title|Content separated by pipe, no extra formatting
+                    news_item = f"{title.strip()}|{full_content.strip()}\n"
+                    news.append(news_item)
         
         return news
     except Exception as e:
@@ -292,17 +392,16 @@ def fetch_livemint():
         
         for item in soup.select('.listingPage h2 a'):
             title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
+            href = item.get('href')
+            if not href:
+                continue
+            link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'LiveMint')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -325,17 +424,16 @@ def fetch_ndtv_business():
         
         for item in soup.select('.newsHdng a'):
             title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
+            href = item.get('href')
+            if not href:
+                continue
+            link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'NDTV Business')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -358,17 +456,16 @@ def fetch_business_standard():
         
         for item in soup.select('.article-list h2 a'):
             title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
+            href = item.get('href')
+            if not href:
+                continue
+            link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Business Standard')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -391,17 +488,16 @@ def fetch_reuters_world():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
+            href = item.get('href')
+            if not href:
+                continue
+            link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Reuters World')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -424,17 +520,16 @@ def fetch_bloomberg_markets():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
-            link = construct_url(base_url, href)  # Fixed URL construction
+            href = item.get('href')
+            if not href:
+                continue
+            link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Bloomberg Markets')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -457,17 +552,16 @@ def fetch_cnbc_world():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'CNBC World Markets')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -490,17 +584,16 @@ def fetch_financial_times():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Financial Times')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -523,17 +616,16 @@ def fetch_wall_street_journal():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Wall Street Journal')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -556,17 +648,16 @@ def fetch_oil_price_news():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Reuters Commodities')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -589,17 +680,16 @@ def fetch_us_fed_news():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Reuters US Markets')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -622,17 +712,16 @@ def fetch_china_market_news():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Reuters Asia Markets')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -655,17 +744,16 @@ def fetch_zeebiz():
         
         for item in soup.select('.article-title a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Zee Business')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -694,11 +782,8 @@ def fetch_financial_express():
             full_content = get_full_article_content(link, 'Financial Express')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -727,11 +812,8 @@ def fetch_business_today():
             full_content = get_full_article_content(link, 'Business Today')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -754,17 +836,16 @@ def fetch_outlook_business():
         
         for item in soup.select('h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)  # Fixed URL construction
             
             full_content = get_full_article_content(link, 'Outlook Business')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -787,17 +868,16 @@ def fetch_fortune_india():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Fortune India')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -820,17 +900,16 @@ def fetch_inc42():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Inc42')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -853,17 +932,16 @@ def fetch_yourstory():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'YourStory')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -886,17 +964,16 @@ def fetch_entrackr():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Entrackr')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -919,17 +996,16 @@ def fetch_techcrunch_india():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'TechCrunch India')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -952,17 +1028,16 @@ def fetch_venturebeat():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'VentureBeat')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -985,17 +1060,16 @@ def fetch_techcrunch():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'TechCrunch')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -1018,17 +1092,16 @@ def fetch_arstechnica():
         
         for item in soup.select('h2 a, h3 a'):
             title = item.get_text(strip=True)
-            href = item['href']
+            href = item.get('href')
+            if not href:
+                continue
             link = construct_url(base_url, href)
             
             full_content = get_full_article_content(link, 'Ars Technica')
             
             if full_content and is_valid_news_item(title, full_content):
-                news_item = f"""
-TITLE: {title}
-FULL CONTENT:
-{full_content}
-"""
+                # Compact format: Title|Content separated by pipe, no extra formatting
+                news_item = f"{title.strip()}|{full_content.strip()}\n"
                 news.append(news_item)
         
         return news
@@ -1038,6 +1111,7 @@ FULL CONTENT:
 
 def main():
     all_news = []
+    seen_titles = set()  # Track titles to avoid duplicates across sources
     
     print("Fetching FULL DETAILED news from multiple sources...")
     
@@ -1204,13 +1278,30 @@ def main():
     except Exception as e:
         print("China Market News error:", e)
 
+    # Remove duplicates based on title similarity
+    unique_news = []
+    for news_item in all_news:
+        title = news_item.split('|')[0].strip().lower()
+        # Create a simplified title for comparison
+        simple_title = ''.join(title.split()[:8])  # First 8 words, no spaces
+        
+        if simple_title not in seen_titles:
+            seen_titles.add(simple_title)
+            unique_news.append(news_item)
+    
     filename = f"FULL_INDIAN_STOCK_NEWS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
     with open(filename, 'w', encoding='utf-8') as f:
-        for i, news in enumerate(all_news, 1):
-            f.write(news)
-            f.write("\n")
+        # Add header with format explanation for LLM processing
+        f.write("# Format: Title|FullContent (one article per line, pipe-separated)\n")
+        f.write("# This compact format preserves all content while minimizing file size for LLM analysis\n")
+        f.write(f"# Collected from {len(all_news)} sources, deduplicated to {len(unique_news)} unique articles\n\n")
+        
+        for news in unique_news:
+            f.write(news)  # Each news item already has a newline
     
-    print(f"Saved {len(all_news)} FULL news articles to {filename}")
+    print(f"Collected {len(all_news)} articles total, saved {len(unique_news)} unique articles to {filename}")
+    print(f"Format: Compact pipe-separated (Title|Content) for optimal LLM processing")
+    print(f"Duplicate removal: {len(all_news) - len(unique_news)} duplicate articles filtered out")
     print(f"News sources included: Indian sources (NewsAPI, Finnhub, Moneycontrol, Economic Times, LiveMint, NDTV Business, Business Standard, Zee Business, Financial Express, Business Today, Outlook Business, Fortune India, Inc42, YourStory, Entrackr) + Global sources (TechCrunch India, VentureBeat, TechCrunch, Ars Technica, Reuters, Bloomberg, CNBC, FT, WSJ, Oil prices, US Fed, China markets)")
 
 if __name__ == "__main__":

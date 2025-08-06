@@ -1289,7 +1289,7 @@ def main():
             seen_titles.add(simple_title)
             unique_news.append(news_item)
     
-    filename = f"FULL_INDIAN_STOCK_NEWS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    filename = "FULL_INDIAN_STOCK_NEWS.txt"
     with open(filename, 'w', encoding='utf-8') as f:
         # Add header with format explanation for LLM processing
         f.write("# Format: Title|FullContent (one article per line, pipe-separated)\n")

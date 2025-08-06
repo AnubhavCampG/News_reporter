@@ -239,51 +239,6 @@ def analyze_stock_opportunities():
     except Exception as e:
         print(f"❌ Error saving file: {e}")
 
-def quick_stock_check(company_name):
-    """Quick check for specific company news with web search"""
-    
-    client = OpenAI(
-        base_url="https://openrouter.ai/api/v1",
-        api_key="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",
-    )
-    
-    prompt = f"""
-    Search the web for the latest news and developments about {company_name} in the Indian stock market today.
-    
-    Provide:
-    1. Current stock price and today's movement
-    2. Latest news affecting the stock
-    3. Trading recommendation (BUY/SELL/HOLD)
-    4. Intraday strategy if applicable
-    5. Key levels to watch
-    
-    Focus on actionable trading insights for today/tomorrow.
-    """
-    
-    try:
-        print(f"🔍 Checking latest updates for: {company_name}")
-        
-        completion = client.chat.completions.create(
-            extra_headers={
-                "HTTP-Referer": "https://your-site-url.com",  # Optional
-                "X-Title": "Stock News Analyzer",  # Optional
-            },
-            model="openai/gpt-oss-120b",
-            messages=[
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ]
-        )
-        
-        analysis = completion.choices[0].message.content
-        print(f"\n📊 ANALYSIS FOR {company_name.upper()}:")
-        print("="*50)
-        print(analysis)
-            
-    except Exception as e:
-        print(f"❌ Error: {e}")
 
 if __name__ == "__main__":
     print("🎯 INDIAN STOCK MARKET - OPTIMIZED INTRADAY TRADING ANALYZER")
@@ -297,11 +252,6 @@ if __name__ == "__main__":
     analyze_stock_opportunities()
     
     print("\n" + "="*70)
-    print("💡 ADDITIONAL OPTIONS:")
-    print("• For specific company check: quick_stock_check('Company Name')")
-    print("• Example: quick_stock_check('Reliance Industries')")
-    print("• Example: quick_stock_check('TCS')")
-    print("="*70)
     print("\n⚠️  DISCLAIMER: This is for educational purposes only.")
     print("    Always do your own research before trading!")
     print("\n📝 Full analysis saved to: trading_analysis_output.txt")
